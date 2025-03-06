@@ -2,3 +2,4 @@ streamlit
 firecrawl-py
 openai
 agno
+requests
