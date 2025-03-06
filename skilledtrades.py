@@ -17,7 +17,7 @@ st.markdown(
     This app retrieves data for your selected trade and state:
     - **Bureau of Labor Statistics (BLS) Projections**
     - **Colleges & Universities Educational Programs**
-    - **LinkedIn Job Listings**
+    - **Job Listings (via Indeed)**
     """
 )
 
@@ -38,15 +38,12 @@ states = [
 selected_trade = st.selectbox("Select a Trade", trades)
 selected_state = st.selectbox("Select a State", states)
 
-# --- Educational Programs Functions ---
-
-def fetch_education_programs_google(state: str, industry: str):
+# --- Function to fetch job listings from Indeed using Google CSE ---
+def fetch_job_listings_indeed(industry: str, state: str):
     """
-    Uses Google Custom Search Engine to look for college/university pages
-    that list programs related to the specified industry in the given state.
+    Uses Google Custom Search Engine to find job listings on Indeed.com.
     """
-    # Refine the query to target manufacturing or relevant programs
-    query = f"{industry} manufacturing programs colleges {state} site:edu"
+    query = f"{industry} jobs {state} site:indeed.com"
     url = "https://www.googleapis.com/customsearch/v1"
     params = {
          "key": GOOGLE_API_KEY,
@@ -69,29 +66,7 @@ def fetch_education_programs_google(state: str, industry: str):
     else:
          return [{"error": response.status_code, "message": response.text}]
 
-def fetch_education_programs_scorecard(state: str, industry: str):
-    """
-    Alternative: Uses the College Scorecard API to retrieve structured data about
-    colleges in the given state. This function is simplified; you might need to refine
-    the query and process the response to match your requirements.
-    """
-    url = "https://api.data.gov/ed/collegescorecard/v1/schools"
-    params = {
-         "api_key": COLLEGE_SCORECARD_API_KEY,
-         "school.state": state,
-         "per_page": 10,
-         # Example fields; adjust as needed
-         "fields": "id,school.name,school.city,school.state,latest.cost.tuition.in_state"
-    }
-    response = requests.get(url, params=params)
-    if response.status_code == 200:
-         return response.json()
-    else:
-         return {"error": response.status_code, "message": response.text}
-
-# --- Main Agents for BLS and LinkedIn (using Firecrawl) ---
-
-# Create a shared OpenAIChat model instance with the API key
+# Create a shared OpenAIChat model instance with the API key for the BLS query.
 model = OpenAIChat(
     id="gpt-4o",
     max_tokens=1024,
@@ -99,7 +74,7 @@ model = OpenAIChat(
     api_key=OPENAI_API_KEY
 )
 
-# Create agents for BLS and LinkedIn queries
+# Create an agent for the BLS projections using FirecrawlTools.
 bls_agent = Agent(
     name="BLS Projections Agent",
     role="Retrieves BLS projections for a given industry and state.",
@@ -107,19 +82,8 @@ bls_agent = Agent(
     model=model
 )
 
-linkedin_agent = Agent(
-    name="LinkedIn Jobs Agent",
-    role="Retrieves LinkedIn job listings for a given industry and state.",
-    tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)],
-    model=model
-)
-
-# Define queries for BLS and LinkedIn
+# Define query for BLS projections.
 bls_query = f"Retrieve Bureau of Labor Statistics projections for the {selected_trade} industry in {selected_state}."
-linkedin_query = (
-    f"Get current LinkedIn job listings for the {selected_trade} industry in {selected_state}. "
-    "Include job title, company name, location, and a brief job description."
-)
 
 if st.button("Fetch Data"):
     with st.spinner("Fetching BLS projections..."):
@@ -127,27 +91,38 @@ if st.button("Fetch Data"):
          st.subheader("Bureau of Labor Statistics Projections")
          st.write(bls_response.content)
     
-    # --- Educational Programs Display ---
-    # Option 1: Using Google Custom Search Engine
+    # Educational Programs Section (using Google CSE as before)
     with st.spinner("Fetching Educational Programs via Google Custom Search..."):
-         edu_results = fetch_education_programs_google(selected_state, selected_trade)
-         st.subheader("Educational Programs (Google Custom Search)")
-         if edu_results and "error" not in edu_results[0]:
+         edu_query = f"{selected_trade} manufacturing programs colleges {selected_state} site:edu"
+         edu_url = "https://www.googleapis.com/customsearch/v1"
+         edu_params = {
+             "key": GOOGLE_API_KEY,
+             "cx": GOOGLE_CSE_ID,
+             "q": edu_query,
+             "num": 10
+         }
+         edu_response = requests.get(edu_url, params=edu_params)
+         if edu_response.status_code == 200:
+             edu_data = edu_response.json()
+             edu_results = edu_data.get("items", [])
+             st.subheader("Educational Programs (Google Custom Search)")
              for item in edu_results:
                  st.write(f"**{item.get('title')}**")
                  st.write(item.get("snippet"))
                  st.write(item.get("link"))
                  st.markdown("---")
          else:
-             st.write("No results or error:", edu_results)
+             st.write("Error fetching educational programs:", edu_response.text)
     
-    # Option 2: Using College Scorecard API (uncomment to use)
-    # with st.spinner("Fetching Educational Programs via College Scorecard API..."):
-    #      scorecard_results = fetch_education_programs_scorecard(selected_state, selected_trade)
-    #      st.subheader("Educational Programs (College Scorecard)")
-    #      st.write(scorecard_results)
-    
-    with st.spinner("Fetching LinkedIn Job Listings..."):
-         linkedin_response = linkedin_agent.run(linkedin_query)
-         st.subheader("LinkedIn Job Listings")
-         st.write(linkedin_response.content)
+    # Fetch job listings from Indeed
+    with st.spinner("Fetching Job Listings from Indeed..."):
+         indeed_results = fetch_job_listings_indeed(selected_trade, selected_state)
+         st.subheader("Job Listings (Indeed)")
+         if indeed_results and "error" not in indeed_results[0]:
+             for item in indeed_results:
+                 st.write(f"**{item.get('title')}**")
+                 st.write(item.get("snippet"))
+                 st.write(item.get("link"))
+                 st.markdown("---")
+         else:
+             st.write("Error fetching job listings:", indeed_results)
