@@ -34,34 +34,33 @@ states = [
 selected_trade = st.selectbox("Select a Trade", trades)
 selected_state = st.selectbox("Select a State", states)
 
+# Create a shared OpenAIChat model instance with the API key
+model = OpenAIChat(
+    id="gpt-4o",
+    max_tokens=1024,
+    temperature=0.5,
+    api_key=OPENAI_API_KEY
+)
+
 if st.button("Fetch Data"):
-    # Create individual agents with FirecrawlTools for each task
+    # Create individual agents with the shared model and FirecrawlTools.
     bls_agent = Agent(
         name="BLS Projections Agent",
         role="Retrieves BLS projections for a given industry and state.",
-        tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)]
+        tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)],
+        model=model
     )
     education_agent = Agent(
         name="Education Programs Agent",
         role="Retrieves educational program details from colleges and universities.",
-        tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)]
+        tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)],
+        model=model
     )
     linkedin_agent = Agent(
         name="LinkedIn Jobs Agent",
         role="Retrieves LinkedIn job listings for a given industry and state.",
-        tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)]
-    )
-
-    # Optionally, you could create a team agent that includes these agents using OpenAIChat.
-    team_agent = Agent(
-        name="Industry Insights Team",
-        team=[bls_agent, education_agent, linkedin_agent],
-        model=OpenAIChat(
-            api_key=OPENAI_API_KEY,
-            id="gpt-4o",
-            max_tokens=1024,
-            temperature=0.5,
-        )
+        tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)],
+        model=model
     )
 
     # Define queries for each task
