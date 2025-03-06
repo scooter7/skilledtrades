@@ -2,6 +2,8 @@ import streamlit as st
 import requests
 import json
 import pandas as pd
+
+# Agno imports
 from agno.agent import Agent
 from agno.tools.firecrawl import FirecrawlTools
 from agno.models.openai import OpenAIChat
@@ -30,18 +32,22 @@ state_abbrev_map = {
     "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY"
 }
 
-# Define available trades and states (full names)
+# Define available trades
 trades = [
-    "Manufacturing", "Automotive", "Construction", "Energy", "Healthcare", "Information Technology"
+    "Manufacturing", 
+    "Automotive", 
+    "Construction", 
+    "Energy", 
+    "Healthcare", 
+    "Information Technology"
 ]
-states = list(state_abbrev_map.keys())  # All full state names from the dictionary
 
 # Set up the Streamlit app
 st.title("Industry & Career Insights Agent")
 st.markdown(
     """
     This app retrieves data for your selected trade and state:
-    - **Bureau of Labor Statistics (BLS) Projections** (via Agno Firecrawl)
+    - **Bureau of Labor Statistics (BLS) Projections** (with fallback if state-level data not found)
     - **Colleges & Universities Educational Programs** (via College Scorecard + OpenAI)
     - **Job Listings** (via Indeed + Google Custom Search)
     """
@@ -49,7 +55,8 @@ st.markdown(
 
 # User selections
 selected_trade = st.selectbox("Select a Trade", trades)
-selected_state = st.selectbox("Select a State", states)
+states_list = list(state_abbrev_map.keys())  # all full state names
+selected_state = st.selectbox("Select a State", states_list)
 
 # Shared OpenAIChat model instance for the agents
 model = OpenAIChat(
@@ -62,7 +69,7 @@ model = OpenAIChat(
 # Agent for BLS data (via Firecrawl)
 bls_agent = Agent(
     name="BLS Projections Agent",
-    role="Retrieves BLS projections for a given industry and state.",
+    role="Retrieves BLS projections for a given industry and state (fallback to national if needed).",
     tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)],
     model=model
 )
@@ -75,37 +82,47 @@ education_agent = Agent(
     model=model
 )
 
-# --- Functions ---
-
 def fetch_bls_projections(trade: str, state: str) -> str:
     """
-    Fetch BLS projections using the Firecrawl-based agent.
+    Tries to retrieve state-level BLS projections for the chosen trade and state.
+    If no valuable data is found, requests national-level data and 
+    also attempts to gather info from the state's workforce development site.
     """
-    query = f"Retrieve Bureau of Labor Statistics projections for the {trade} industry in {state}."
+    query = (
+        f"Retrieve BLS projections for the {trade} industry in {state}. "
+        "If no valuable data is found at the state level, present national-level growth projections "
+        f"and also gather data from the {state} workforce development site about job outlook "
+        "for this industry. Provide a thorough answer."
+    )
     response = bls_agent.run(query)
     return response.content
 
-def fetch_education_programs_table(full_state_name: str, industry: str, agent: Agent) -> pd.DataFrame:
+def fetch_education_programs_table(full_state_name: str, trade: str, agent: Agent) -> pd.DataFrame:
     """
-    Uses the College Scorecard API to get colleges in the given state (by abbreviation),
-    then queries each college for program details using the agent.
-    Returns a DataFrame with the columns:
-    College/University, Degree Type, Tuition Cost, Program Duration,
-    Offers Microcredentials, Mentions AI in Program Description.
+    Uses the College Scorecard API to get up to 100 colleges in the given state 
+    that have CIP program titles containing the trade (e.g., 'manufacturing').
+    Then queries each college for details about the program (degree type, duration, 
+    microcredentials, AI mention) via the agent.
     """
     # Convert full state name to abbreviation
-    state_abbrev = state_abbrev_map.get(full_state_name, None)
+    state_abbrev = state_abbrev_map.get(full_state_name)
     if not state_abbrev:
         st.error(f"Unable to map state '{full_state_name}' to an abbreviation.")
         return pd.DataFrame()
 
-    # Query College Scorecard
+    # Convert trade to lowercase for CIP search
+    trade_keyword = trade.lower()
+
+    # Query College Scorecard, searching CIP titles for the trade keyword
     url = "https://api.data.gov/ed/collegescorecard/v1/schools"
     params = {
         "api_key": COLLEGE_SCORECARD_API_KEY,
         "school.state": state_abbrev,
-        "per_page": 5,  # limit for demo
-        "fields": "school.name,latest.cost.tuition.in_state"
+        # CIP 4-digit title search for the trade keyword
+        "latest.programs.cip_4_digit.title__icontains": trade_keyword,
+        # Increase per_page to get more results
+        "per_page": 100,
+        "fields": "school.name,latest.cost.tuition.in_state,latest.programs.cip_4_digit.title"
     }
     response = requests.get(url, params=params)
     if response.status_code != 200:
@@ -115,7 +132,7 @@ def fetch_education_programs_table(full_state_name: str, industry: str, agent: A
     data = response.json()
     schools = data.get("results", [])
     if not schools:
-        st.warning(f"No colleges found for {full_state_name} ({state_abbrev}).")
+        st.warning(f"No colleges found in {full_state_name} that match '{trade_keyword}' in CIP titles.")
         return pd.DataFrame()
 
     table_data = []
@@ -123,9 +140,10 @@ def fetch_education_programs_table(full_state_name: str, industry: str, agent: A
         college_name = school.get("school.name", "N/A")
         tuition_cost = school.get("latest.cost.tuition.in_state", "N/A")
 
-        # Query the agent for more details about the program
+        # We'll ask the agent for more program details
+        # The agent will attempt to find or reason about them.
         query = (
-            f"Provide details about the {industry} program at {college_name}. "
+            f"Provide details about the {trade} program at {college_name}. "
             "Return the following information in JSON format with keys: "
             "'degree type', 'program duration', 'offers microcredentials', "
             "'mentions AI in program description'. If data is unavailable, use 'N/A'."
@@ -152,12 +170,12 @@ def fetch_education_programs_table(full_state_name: str, industry: str, agent: A
 
     return pd.DataFrame(table_data)
 
-def fetch_job_listings_indeed(industry: str, state: str):
+def fetch_job_listings_indeed(trade: str, state: str):
     """
     Uses Google Custom Search Engine to find job listings on Indeed.com
-    for the given industry and state.
+    for the given trade and state.
     """
-    query = f"{industry} jobs {state} site:indeed.com"
+    query = f"{trade} jobs {state} site:indeed.com"
     url = "https://www.googleapis.com/customsearch/v1"
     params = {
          "key": GOOGLE_API_KEY,
@@ -172,22 +190,23 @@ def fetch_job_listings_indeed(industry: str, state: str):
     else:
         return [{"error": response.status_code, "message": response.text}]
 
-# --- Main App Logic ---
-
 if st.button("Fetch Data"):
+    # 1. BLS Projections
     with st.spinner("Fetching BLS projections..."):
         bls_data = fetch_bls_projections(selected_trade, selected_state)
         st.subheader("Bureau of Labor Statistics Projections")
         st.write(bls_data)
 
+    # 2. Educational Programs
     with st.spinner("Fetching Educational Programs..."):
         edu_df = fetch_education_programs_table(selected_state, selected_trade, education_agent)
         st.subheader("Educational Programs")
         if not edu_df.empty:
             st.dataframe(edu_df)
         else:
-            st.write("No educational program data available.")
+            st.write("No educational program data available for your selection.")
 
+    # 3. Job Listings (Indeed via Google CSE)
     with st.spinner("Fetching Job Listings from Indeed..."):
         job_results = fetch_job_listings_indeed(selected_trade, selected_state)
         st.subheader("Job Listings (Indeed)")
