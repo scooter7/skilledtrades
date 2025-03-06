@@ -3,3 +3,4 @@ firecrawl-py
 openai
 agno
 requests
+pandas
