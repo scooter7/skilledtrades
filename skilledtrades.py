@@ -1,5 +1,7 @@
 import streamlit as st
 import requests
+import json
+import pandas as pd
 from agno.agent import Agent
 from agno.tools.firecrawl import FirecrawlTools
 from agno.models.openai import OpenAIChat
@@ -38,11 +40,86 @@ states = [
 selected_trade = st.selectbox("Select a Trade", trades)
 selected_state = st.selectbox("Select a State", states)
 
-# --- Function to fetch job listings from Indeed using Google CSE ---
+# Create a shared OpenAIChat model instance
+model = OpenAIChat(
+    id="gpt-4o",
+    max_tokens=1024,
+    temperature=0.5,
+    api_key=OPENAI_API_KEY
+)
+
+# Create an agent for BLS queries (using FirecrawlTools)
+bls_agent = Agent(
+    name="BLS Projections Agent",
+    role="Retrieves BLS projections for a given industry and state.",
+    tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)],
+    model=model
+)
+
+# Create an agent for educational program details (for additional details via OpenAI)
+education_agent = Agent(
+    name="Education Programs Agent",
+    role="Extracts manufacturing program details from college web data.",
+    tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)],
+    model=model
+)
+
+# Create a function to fetch a table of educational program data using the College Scorecard API and agent queries.
+def fetch_education_programs_table(state: str, industry: str, agent: Agent):
+    """
+    Retrieves a list of colleges from the College Scorecard API and queries each one
+    for manufacturing program details. Returns a DataFrame with the columns:
+    College/University, Degree Type, Tuition Cost, Program Duration,
+    Offers Microcredentials, and Mentions AI in Program Description.
+    """
+    url = "https://api.data.gov/ed/collegescorecard/v1/schools"
+    params = {
+         "api_key": COLLEGE_SCORECARD_API_KEY,
+         "school.state": state,
+         "per_page": 5,  # limiting to 5 for demo purposes
+         "fields": "school.name,latest.cost.tuition.in_state"
+    }
+    response = requests.get(url, params=params)
+    if response.status_code != 200:
+         st.error("Error fetching college data: " + response.text)
+         return None
+    data = response.json()
+    schools = data.get("results", [])
+    table_data = []
+    for school in schools:
+         college_name = school.get("school.name", "N/A")
+         tuition_cost = school.get("latest.cost.tuition.in_state", "N/A")
+         # Build a query to extract manufacturing program details
+         query = (
+             f"Provide details about the manufacturing program at {college_name}. "
+             "Return the following information in JSON format with keys: "
+             "'degree type', 'program duration', 'offers microcredentials', "
+             "and 'mentions AI in program description'. If data is unavailable, use 'N/A'."
+         )
+         try:
+             details_response = agent.run(query)
+             # Attempt to parse the response as JSON
+             details_json = json.loads(details_response.content)
+         except Exception as e:
+             details_json = {
+                 "degree type": "N/A",
+                 "program duration": "N/A",
+                 "offers microcredentials": "N/A",
+                 "mentions AI in program description": "N/A"
+             }
+         table_data.append({
+             "College/University": college_name,
+             "Degree Type": details_json.get("degree type", "N/A"),
+             "Tuition Cost": tuition_cost,
+             "Program Duration": details_json.get("program duration", "N/A"),
+             "Offers Microcredentials": details_json.get("offers microcredentials", "N/A"),
+             "Mentions AI in Program Description": details_json.get("mentions AI in program description", "N/A")
+         })
+    df = pd.DataFrame(table_data)
+    return df
+
+# Function to fetch job listings from Indeed using Google CSE
 def fetch_job_listings_indeed(industry: str, state: str):
-    """
-    Uses Google Custom Search Engine to find job listings on Indeed.com.
-    """
     query = f"{industry} jobs {state} site:indeed.com"
     url = "https://www.googleapis.com/customsearch/v1"
     params = {
@@ -66,22 +143,6 @@ def fetch_job_listings_indeed(industry: str, state: str):
     else:
          return [{"error": response.status_code, "message": response.text}]
 
-# Create a shared OpenAIChat model instance with the API key for the BLS query.
-model = OpenAIChat(
-    id="gpt-4o",
-    max_tokens=1024,
-    temperature=0.5,
-    api_key=OPENAI_API_KEY
-)
-
-# Create an agent for the BLS projections using FirecrawlTools.
-bls_agent = Agent(
-    name="BLS Projections Agent",
-    role="Retrieves BLS projections for a given industry and state.",
-    tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)],
-    model=model
-)
-
 # Define query for BLS projections.
 bls_query = f"Retrieve Bureau of Labor Statistics projections for the {selected_trade} industry in {selected_state}."
 
@@ -91,30 +152,16 @@ if st.button("Fetch Data"):
          st.subheader("Bureau of Labor Statistics Projections")
          st.write(bls_response.content)
     
-    # Educational Programs Section (using Google CSE as before)
-    with st.spinner("Fetching Educational Programs via Google Custom Search..."):
-         edu_query = f"{selected_trade} manufacturing programs colleges {selected_state} site:edu"
-         edu_url = "https://www.googleapis.com/customsearch/v1"
-         edu_params = {
-             "key": GOOGLE_API_KEY,
-             "cx": GOOGLE_CSE_ID,
-             "q": edu_query,
-             "num": 10
-         }
-         edu_response = requests.get(edu_url, params=edu_params)
-         if edu_response.status_code == 200:
-             edu_data = edu_response.json()
-             edu_results = edu_data.get("items", [])
-             st.subheader("Educational Programs (Google Custom Search)")
-             for item in edu_results:
-                 st.write(f"**{item.get('title')}**")
-                 st.write(item.get("snippet"))
-                 st.write(item.get("link"))
-                 st.markdown("---")
+    # --- Educational Programs Section ---
+    with st.spinner("Fetching Educational Programs..."):
+         edu_df = fetch_education_programs_table(selected_state, selected_trade, education_agent)
+         if edu_df is not None:
+             st.subheader("Educational Programs")
+             st.dataframe(edu_df)
          else:
-             st.write("Error fetching educational programs:", edu_response.text)
+             st.error("No educational program data available.")
     
-    # Fetch job listings from Indeed
+    # --- Job Listings Section (using Indeed) ---
     with st.spinner("Fetching Job Listings from Indeed..."):
          indeed_results = fetch_job_listings_indeed(selected_trade, selected_state)
          st.subheader("Job Listings (Indeed)")
