@@ -4,3 +4,4 @@ openai
 agno
 requests
 pandas
+jina
