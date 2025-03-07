@@ -3,7 +3,7 @@ import requests
 import json
 import pandas as pd
 
-# Retrieve secrets from Streamlit
+# Google CSE / College Scorecard credentials
 GOOGLE_CSE_ID = st.secrets["google_cse_id"]
 GOOGLE_API_KEY = st.secrets["google_api_key"]
 COLLEGE_SCORECARD_API_KEY = st.secrets["college_scorecard_api_key"]
@@ -25,50 +25,61 @@ state_abbrev_map = {
     "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY"
 }
 
-# Trades
+# Trade List
 TRADES = [
-    "Manufacturing", 
-    "Automotive", 
-    "Construction", 
-    "Energy", 
-    "Healthcare", 
+    "Manufacturing",
+    "Automotive",
+    "Construction",
+    "Energy",
+    "Healthcare",
     "Information Technology"
 ]
 
-# CIP Synonyms for each trade (expanded)
-CIP_SYNONYMS = {
+# CIP Codes for Each Trade
+# These are partial examples; you may need more/other codes.
+CIP_CODES = {
     "Manufacturing": [
-        "manufacturing", "industrial technology", "industrial production",
-        "machining", "welding", "fabrication", "automation"
+        "15.0613",  # Manufacturing Technology/Technician
+        "15.0805",  # Mechanical Engineering/Mechanical Technology/Technician
+        "48.0000",  # Precision Production Trades, General
+        "48.0501",  # Machine Tool Technology/Machinist
+        "48.0508",  # Welding Technology/Welder
     ],
     "Automotive": [
-        "automotive", "auto mechanics", "vehicle maintenance",
-        "diesel technology", "collision repair", "automotive technology"
+        "47.0604",  # Automobile/Automotive Mechanics Technology/Technician
+        "47.0613",  # Medium/Heavy Vehicle and Truck Technology/Technician
+        "47.0603",  # Autobody/Collision and Repair Technology/Technician
     ],
     "Construction": [
-        "construction", "carpentry", "plumbing", "hvac",
-        "electrician", "welding", "masonry", "building construction",
-        "construction management", "building trades", "residential construction"
+        "46.0000",  # Construction Trades, General
+        "46.0201",  # Carpentry/Carpenter
+        "46.0302",  # Electrician
+        "46.0503",  # Plumbing Technology/Plumber
+        "46.0412",  # Building/Construction Site Management/Manager
     ],
     "Energy": [
-        "energy", "renewable energy", "power generation", 
-        "utilities", "oil and gas", "wind technology", "solar technology"
+        "15.0503",  # Energy Management and Systems Technology/Technician
+        "03.0209",  # Renewable Energy
+        "47.0501",  # Stationary Energy Sources Installer and Operator
+        # You might add "Petroleum Technology" CIP codes, etc.
     ],
     "Healthcare": [
-        "healthcare", "nursing", "medical assisting", 
-        "health sciences", "public health", "medical technology",
-        "clinical laboratory", "respiratory therapy"
+        "51.0000",  # Health Services/Allied Health/Health Sciences, General
+        "51.3801",  # Registered Nursing/Registered Nurse
+        "51.0801",  # Medical/Clinical Assistant
+        "51.0707",  # Health Information/Medical Records Technology
     ],
     "Information Technology": [
-        "information technology", "it", "computer science", 
-        "software development", "networking", "cybersecurity",
-        "data science", "web development"
+        "11.0101",  # Computer and Information Sciences, General
+        "11.0201",  # Computer Programming/Programmer, General
+        "11.1003",  # Computer and Information Systems Security/Information Assurance
+        "11.0901",  # Computer Systems Networking and Telecommunications
     ]
 }
 
 def google_cse_search(query: str, num_results=5):
     """
-    Perform a Google Custom Search with the given query, returning up to `num_results` items.
+    Google Custom Search with `query`, returning up to `num_results` items.
     """
     url = "https://www.googleapis.com/customsearch/v1"
     params = {
@@ -85,10 +96,10 @@ def google_cse_search(query: str, num_results=5):
 
 def fetch_bls_data(trade: str, state: str):
     """
-    Multi-step approach to find state-level BLS or workforce info, then fallback to national:
+    Multi-step approach:
       1) 2022-2032 occupational projections for {trade} in {state} site:bls.gov
       2) {state} workforce development {trade} job outlook
-      3) 2022-2032 occupational projections for {trade} site:bls.gov (national)
+      3) 2022-2032 occupational projections for {trade} site:bls.gov (national fallback)
     """
     # Step 1: State-level BLS
     query_1 = f"2022-2032 occupational projections for {trade} in {state} site:bls.gov"
@@ -112,42 +123,28 @@ def fetch_job_listings(trade: str, state: str):
     Google CSE for Indeed job listings for the trade & state.
     """
     query = f"Indeed job listings for {trade} in {state}"
-    results = google_cse_search(query, num_results=5)
-    return results
+    return google_cse_search(query, num_results=5)
 
-def fetch_cip_colleges_for_keyword(keyword: str, abbrev: str) -> list:
+def fetch_cip_colleges_by_codes(cip_codes: list, abbrev: str) -> list:
     """
-    Fetches colleges from College Scorecard that match the given `keyword`
-    in CIP titles, for the specified state abbreviation.
+    Queries College Scorecard for all CIP codes in `cip_codes`, merges results into one list.
     """
-    url = "https://api.data.gov/ed/collegescorecard/v1/schools"
-    params = {
-        "api_key": COLLEGE_SCORECARD_API_KEY,
-        "school.state": abbrev,
-        "latest.programs.cip_4_digit.title__icontains": keyword,
-        "per_page": 100,
-        "fields": "school.name,latest.cost.tuition.in_state,latest.programs.cip_4_digit.title"
-    }
-    resp = requests.get(url, params=params)
-    if resp.status_code != 200:
-        return []
-
-    data = resp.json()
-    return data.get("results", [])
-
-def fetch_cip_colleges(trade: str, state: str) -> list:
-    """
-    Uses CIP_SYNONYMS to gather colleges for multiple synonyms,
-    merging them into one combined list (deduplicating by school.name).
-    """
-    abbrev = state_abbrev_map.get(state)
-    if not abbrev:
-        return []
-
-    synonyms = CIP_SYNONYMS.get(trade, [trade.lower()])
     all_colleges = {}
-    for kw in synonyms:
-        results = fetch_cip_colleges_for_keyword(kw, abbrev)
+    for code in cip_codes:
+        url = "https://api.data.gov/ed/collegescorecard/v1/schools"
+        params = {
+            "api_key": COLLEGE_SCORECARD_API_KEY,
+            "school.state": abbrev,
+            "latest.programs.cip_4_digit.code": code,
+            "per_page": 100,
+            "fields": "school.name,latest.cost.tuition.in_state,latest.programs.cip_4_digit.title"
+        }
+        resp = requests.get(url, params=params)
+        if resp.status_code != 200:
+            continue
+
+        data = resp.json()
+        results = data.get("results", [])
         for item in results:
             name = item.get("school.name", "N/A")
             if name not in all_colleges:
@@ -156,9 +153,18 @@ def fetch_cip_colleges(trade: str, state: str) -> list:
 
 def build_college_dataframe(trade: str, state: str) -> pd.DataFrame:
     """
-    Builds a DataFrame from the CIP-based college lookups for multiple synonyms.
+    For the given trade, gather CIP codes from CIP_CODES dict,
+    query College Scorecard, and return a DataFrame.
     """
-    raw_colleges = fetch_cip_colleges(trade, state)
+    abbrev = state_abbrev_map.get(state)
+    if not abbrev:
+        return pd.DataFrame()
+
+    cip_list = CIP_CODES.get(trade, [])
+    if not cip_list:
+        return pd.DataFrame()
+
+    raw_colleges = fetch_cip_colleges_by_codes(cip_list, abbrev)
     if not raw_colleges:
         return pd.DataFrame()
 
@@ -178,18 +184,19 @@ def build_college_dataframe(trade: str, state: str) -> pd.DataFrame:
     return pd.DataFrame(table_rows)
 
 def main():
-    st.title("Industry & Career Insights (Multi-step BLS + CIP Synonyms)")
+    st.title("Industry & Career Insights (CIP Codes + Multi-step BLS)")
     st.markdown("""
         **Features**:
-        1. **Multi-step BLS** (or workforce dev) queries for state-level data, fallback to national
-        2. **CIP synonyms** to catch more programs in College Scorecard
-        3. **Indeed job listings** (Google CSE)
+        1. **CIP-based** college lookups using official CIP codes for each trade
+        2. **Multi-step BLS** approach for state-level data, workforce dev, then national fallback
+        3. **Indeed** job listings via Google CSE
         
-        **No Jina/Firecrawl**—should be lighter on resources.
+        This approach often yields better college matches than text synonyms.
     """)
 
     trade = st.selectbox("Select a Trade", TRADES)
-    state = st.selectbox("Select a State", list(state_abbrev_map.keys()))
+    states = list(state_abbrev_map.keys())
+    state = st.selectbox("Select a State", states)
 
     if st.button("Fetch Data"):
         with st.spinner("Retrieving BLS / Workforce Data..."):
