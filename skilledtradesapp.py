@@ -3,13 +3,13 @@ import requests
 import json
 import pandas as pd
 
-# Google CSE secrets
+# Google CSE credentials from .streamlit/secrets.toml
 GOOGLE_CSE_ID = st.secrets["google_cse_id"]
 GOOGLE_API_KEY = st.secrets["google_api_key"]
 # College Scorecard API key
 COLLEGE_SCORECARD_API_KEY = st.secrets["college_scorecard_api_key"]
 
-# State Abbreviations
+# State Abbreviation Map
 state_abbrev_map = {
     "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
     "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
@@ -26,7 +26,7 @@ state_abbrev_map = {
     "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY"
 }
 
-# Trade & State Options
+# Trades & States
 TRADES = [
     "Manufacturing", "Automotive", "Construction", 
     "Energy", "Healthcare", "Information Technology"
@@ -35,8 +35,7 @@ STATES = list(state_abbrev_map.keys())
 
 def google_cse_search(query: str, num_results=5):
     """
-    Helper function to perform a Google Custom Search
-    and return up to `num_results` items.
+    Performs a Google Custom Search and returns up to `num_results` items.
     """
     url = "https://www.googleapis.com/customsearch/v1"
     params = {
@@ -54,17 +53,23 @@ def google_cse_search(query: str, num_results=5):
 
 def fetch_bls_data(trade: str, state: str):
     """
-    Searches for BLS or workforce outlook data using Google CSE.
-    We'll simply return the top search results for display.
+    1) Search for BLS data or workforce outlook for the given trade & state.
+    2) If no results are found, do a second search for national BLS data/outlook.
+    3) Return the final list of search items.
     """
-    query = f"BLS data or workforce outlook for {trade} in {state}"
-    results = google_cse_search(query, num_results=5)
-    return results
+    query_state = f"BLS data or workforce outlook for {trade} in {state}"
+    results_state = google_cse_search(query_state, num_results=5)
+    if results_state:
+        return results_state
+
+    # Fallback to national data if state-level is empty
+    query_national = f"National BLS data or outlook for {trade}"
+    results_national = google_cse_search(query_national, num_results=5)
+    return results_national
 
 def fetch_job_listings(trade: str, state: str):
     """
-    Searches for Indeed job listings using Google CSE.
-    We'll simply return the top search results for display.
+    Uses Google CSE to find Indeed job listings for the trade & state.
     """
     query = f"Indeed job listings for {trade} in {state}"
     results = google_cse_search(query, num_results=5)
@@ -73,7 +78,7 @@ def fetch_job_listings(trade: str, state: str):
 def fetch_cip_colleges(trade: str, state: str) -> list:
     """
     Uses the College Scorecard API to find up to 100 colleges in the given state
-    whose CIP titles contain the trade keyword (case-insensitive).
+    whose CIP program titles contain the trade keyword (case-insensitive).
     """
     abbrev = state_abbrev_map.get(state)
     if not abbrev:
@@ -109,7 +114,7 @@ def fetch_cip_colleges(trade: str, state: str) -> list:
 
 def build_college_dataframe(trade: str, state: str) -> pd.DataFrame:
     """
-    Builds a Pandas DataFrame from the CIP-based college lookups.
+    Converts the CIP-based college lookup into a Pandas DataFrame.
     """
     raw_colleges = fetch_cip_colleges(trade, state)
     if not raw_colleges:
@@ -129,20 +134,20 @@ def build_college_dataframe(trade: str, state: str) -> pd.DataFrame:
 def main():
     st.title("Industry & Career Insights (Google CSE + College Scorecard)")
     st.markdown("""
-        **Features**:
-        1. BLS Projections / Workforce Data (via Google Custom Search)
-        2. Colleges (via College Scorecard API)
-        3. Job Listings (via Google Custom Search for Indeed)
+        **This app retrieves**:
+        1. **BLS Projections** or Workforce Outlook (via Google CSE)
+        2. **Colleges** offering CIP-based programs (via College Scorecard)
+        3. **Indeed Job Listings** (via Google CSE)
 
-        **Note**: This approach uses less resources than Jina-based searching.
+        *No Jina or Firecrawl used—lighter resource usage.*
     """)
 
-    trade = st.selectbox("Select a Trade", TRADES)
-    state = st.selectbox("Select a State", STATES)
+    selected_trade = st.selectbox("Select a Trade", TRADES)
+    selected_state = st.selectbox("Select a State", STATES)
 
     if st.button("Fetch Data"):
         with st.spinner("Searching BLS data..."):
-            bls_results = fetch_bls_data(trade, state)
+            bls_results = fetch_bls_data(selected_trade, selected_state)
             st.subheader("BLS Data / Workforce Outlook")
             if not bls_results:
                 st.write("No results found.")
@@ -154,7 +159,7 @@ def main():
                     st.write("---")
 
         with st.spinner("Fetching Colleges..."):
-            df_colleges = build_college_dataframe(trade, state)
+            df_colleges = build_college_dataframe(selected_trade, selected_state)
             st.subheader("Colleges & Universities")
             if df_colleges.empty:
                 st.write("No colleges found for this state & trade.")
@@ -162,7 +167,7 @@ def main():
                 st.dataframe(df_colleges)
 
         with st.spinner("Searching Indeed Job Listings..."):
-            job_results = fetch_job_listings(trade, state)
+            job_results = fetch_job_listings(selected_trade, selected_state)
             st.subheader("Job Listings (Indeed)")
             if not job_results:
                 st.write("No job listings found.")
