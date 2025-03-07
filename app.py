@@ -17,7 +17,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 COLLEGE_SCORECARD_API_KEY = os.getenv("COLLEGE_SCORECARD_API_KEY")
 
 if not (JINA_API_KEY and OPENAI_API_KEY and COLLEGE_SCORECARD_API_KEY):
-    st.error("Missing one or more required environment variables. Please set JINA_API_KEY, OPENAI_API_KEY, and COLLEGE_SCORECARD_API_KEY.")
+    st.error("Missing one or more required environment variables: JINA_API_KEY, OPENAI_API_KEY, COLLEGE_SCORECARD_API_KEY")
     st.stop()
 
 ###############################################################################
@@ -219,7 +219,7 @@ def fetch_job_listings(agent: Agent, trade: str, state: str) -> str:
 # Streamlit App
 ###############################################################################
 def main():
-    st.title("Industry & Career Insights (Jina + College Scorecard on Railway)")
+    st.title("Industry & Career Insights (Railway Env Vars + Streamlit)")
     st.markdown(
         """
         This app retrieves:
@@ -227,7 +227,7 @@ def main():
         2. **Colleges** offering CIP-based programs in that state, plus refined details from Jina.
         3. **Job Listings** from Indeed (via Jina search).
 
-        **Note:** Keys are read from environment variables (Railway) rather than Streamlit secrets.
+        **Note:** Keys are read from environment variables, but still using Streamlit for the UI.
         ---
         """
     )
@@ -258,9 +258,8 @@ def main():
             st.subheader("Job Listings (Indeed)")
             st.write(job_content)
 
-
 ###############################################################################
-# Create the Agent with JinaReaderTools, referencing environment variables
+# Create the Agent with JinaReaderTools
 ###############################################################################
 agent = Agent(
     tools=[JinaReaderTools(api_key=JINA_API_KEY)],
