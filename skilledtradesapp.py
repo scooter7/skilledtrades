@@ -83,15 +83,16 @@ def fetch_job_listings(trade: str, state: str) -> str:
     response = agent.run(query)
     return response.content
 
-def fetch_cip_colleges(trade: str, state: str) -> list:
+def fetch_colleges_with_fallback(trade: str, state: str) -> list:
     """
-    For the given trade, gather CIP codes from CIP_CODES,
-    query College Scorecard, and merge results by school name.
+    1) Attempt CIP code queries.
+    2) If no results, fallback to text-based search (title__icontains).
     """
     abbrev = STATE_ABBREV_MAP.get(state)
     if not abbrev:
         return []
 
+    # 1) CIP-based search
     codes = CIP_CODES.get(trade, [])
     all_colleges = {}
     for code in codes:
@@ -109,8 +110,33 @@ def fetch_cip_colleges(trade: str, state: str) -> list:
             results = data.get("results", [])
             for item in results:
                 name = item.get("school.name", "N/A")
-                if name not in all_colleges:
-                    all_colleges[name] = item
+                all_colleges[name] = item
+
+    # If we found results via CIP codes, return them
+    if all_colleges:
+        return list(all_colleges.values())
+
+    # 2) Fallback: synonyms text search
+    # For example, if "Construction" might appear in CIP titles as "construction trades," etc.
+    # We'll do a broad "title__icontains" query with synonyms.
+    synonyms = ["construction", "carpentry", "hvac", ...]  # adjust for your trade
+    for kw in synonyms:
+        url = "https://api.data.gov/ed/collegescorecard/v1/schools"
+        params = {
+            "api_key": COLLEGE_SCORECARD_API_KEY,
+            "school.state": abbrev,
+            "latest.programs.cip_4_digit.title__icontains": kw,
+            "per_page": 100,
+            "fields": "school.name,latest.cost.tuition.in_state,latest.programs.cip_4_digit.title"
+        }
+        resp = requests.get(url, params=params)
+        if resp.status_code == 200:
+            data = resp.json()
+            results = data.get("results", [])
+            for item in results:
+                name = item.get("school.name", "N/A")
+                all_colleges[name] = item
+
     return list(all_colleges.values())
 
 def build_college_dataframe(trade: str, state: str) -> pd.DataFrame:
