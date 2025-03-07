@@ -1,7 +1,6 @@
 streamlit
-firecrawl-py
-openai
 agno
+jina
+openai
 requests
 pandas
-jina
