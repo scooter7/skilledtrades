@@ -1,81 +1,93 @@
 import streamlit as st
-# Import the Firecrawl client (adjust the import based on how the package is installed)
-from firecrawl import FireCrawl  
+from agno.agent import Agent
+from agno.tools.firecrawl import FirecrawlTools
+from agno.models.openai import OpenAIChat
 
 # Retrieve API keys from Streamlit secrets
 OPENAI_API_KEY = st.secrets["openai_api_key"]
 FIRECRAWL_API_KEY = st.secrets["firecrawl_api_key"]
 
-# Create an instance of the Firecrawl agent
-firecrawl = FireCrawl(api_key=FIRECRAWL_API_KEY)
-
-# Define functions that use Firecrawl to fetch data from various sources
-
-def fetch_bls_projections(industry: str, state: str):
-    # Create a query that describes exactly what you need.
-    query = (
-        f"Retrieve Bureau of Labor Statistics projections for the {industry} industry in {state}."
-    )
-    response = firecrawl.run(query, api_key=OPENAI_API_KEY)
-    return response
-
-def fetch_education_programs(state: str, industry: str):
-    # Craft a query to extract data on relevant colleges and universities.
-    query = (
-        f"List the colleges and universities in {state} that offer programs to train "
-        f"for a career in {industry}. For each institution, provide details including program offerings, "
-        f"descriptions, tuition price, and program length. Compare these programs by institution."
-    )
-    response = firecrawl.run(query, api_key=OPENAI_API_KEY)
-    return response
-
-def fetch_linkedin_jobs(industry: str, state: str):
-    # Build a query to pull job listings data from LinkedIn.
-    query = (
-        f"Get current LinkedIn job listings for the {industry} industry in {state}. "
-        f"Provide job title, company name, location, and a brief job description."
-    )
-    response = firecrawl.run(query, api_key=OPENAI_API_KEY)
-    return response
-
-# Streamlit app layout
-
 st.title("Industry & Career Insights Agent")
-st.markdown("""
-This agent uses Agno's Firecrawl tool to retrieve:
-- **BLS Projections** for your selected industry and state.
-- **Educational Programs** available at colleges/universities in your state for your industry.
-- **LinkedIn Job Listings** for the industry in your state.
-""")
+st.markdown(
+    """
+    This app retrieves data for your selected trade and state:
+    - **Bureau of Labor Statistics (BLS) Projections**
+    - **Colleges & Universities Educational Programs**
+    - **LinkedIn Job Listings**
+    """
+)
 
 # Define available trades and states.
-trades = ["Manufacturing", "Automotive", "Construction", "Energy", "Healthcare", "Information Technology"]
+trades = [
+    "Manufacturing", "Automotive", "Construction", "Energy", "Healthcare", "Information Technology"
+]
 states = [
-    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware", 
-    "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky", 
-    "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi", 
-    "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico", 
-    "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania", 
-    "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont", 
+    "Alabama", "Alaska", "Arizona", "Arkansas", "California", "Colorado", "Connecticut", "Delaware",
+    "Florida", "Georgia", "Hawaii", "Idaho", "Illinois", "Indiana", "Iowa", "Kansas", "Kentucky",
+    "Louisiana", "Maine", "Maryland", "Massachusetts", "Michigan", "Minnesota", "Mississippi",
+    "Missouri", "Montana", "Nebraska", "Nevada", "New Hampshire", "New Jersey", "New Mexico",
+    "New York", "North Carolina", "North Dakota", "Ohio", "Oklahoma", "Oregon", "Pennsylvania",
+    "Rhode Island", "South Carolina", "South Dakota", "Tennessee", "Texas", "Utah", "Vermont",
     "Virginia", "Washington", "West Virginia", "Wisconsin", "Wyoming"
 ]
 
-# User selections
 selected_trade = st.selectbox("Select a Trade", trades)
 selected_state = st.selectbox("Select a State", states)
 
+# Create a shared OpenAIChat model instance with the API key
+model = OpenAIChat(
+    id="gpt-4o",
+    max_tokens=1024,
+    temperature=0.5,
+    api_key=OPENAI_API_KEY
+)
+
 if st.button("Fetch Data"):
+    # Create individual agents with the shared model and FirecrawlTools.
+    bls_agent = Agent(
+        name="BLS Projections Agent",
+        role="Retrieves BLS projections for a given industry and state.",
+        tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)],
+        model=model
+    )
+    education_agent = Agent(
+        name="Education Programs Agent",
+        role="Retrieves educational program details from colleges and universities.",
+        tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)],
+        model=model
+    )
+    linkedin_agent = Agent(
+        name="LinkedIn Jobs Agent",
+        role="Retrieves LinkedIn job listings for a given industry and state.",
+        tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)],
+        model=model
+    )
+
+    # Define queries for each task
+    bls_query = (
+        f"Retrieve Bureau of Labor Statistics projections for the {selected_trade} industry in {selected_state}."
+    )
+    education_query = (
+        f"List the colleges and universities in {selected_state} that offer programs to train for a career in {selected_trade}. "
+        "Provide details including program offerings, descriptions, tuition price, and program length."
+    )
+    linkedin_query = (
+        f"Get current LinkedIn job listings for the {selected_trade} industry in {selected_state}. "
+        "Include job title, company name, location, and a brief job description."
+    )
+
+    # Run each query using the corresponding agent
     with st.spinner("Fetching BLS projections..."):
-        bls_data = fetch_bls_projections(selected_trade, selected_state)
+        bls_response = bls_agent.run(bls_query)
         st.subheader("Bureau of Labor Statistics Projections")
-        st.write(bls_data)
+        st.write(bls_response.content)
 
-    with st.spinner("Fetching educational program details..."):
-        education_data = fetch_education_programs(selected_state, selected_trade)
-        st.subheader("Colleges and Universities Educational Programs")
-        st.write(education_data)
+    with st.spinner("Fetching Educational Programs..."):
+        education_response = education_agent.run(education_query)
+        st.subheader("Educational Programs")
+        st.write(education_response.content)
 
-    with st.spinner("Fetching LinkedIn job listings..."):
-        jobs_data = fetch_linkedin_jobs(selected_trade, selected_state)
+    with st.spinner("Fetching LinkedIn Job Listings..."):
+        linkedin_response = linkedin_agent.run(linkedin_query)
         st.subheader("LinkedIn Job Listings")
-        st.write(jobs_data)
+        st.write(linkedin_response.content)
