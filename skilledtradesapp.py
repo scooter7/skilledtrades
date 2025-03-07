@@ -9,7 +9,7 @@ from agno.tools.jina import JinaReaderTools
 from agno.models.openai import OpenAIChat
 
 ###############################################################################
-# Retrieve Secrets
+# Retrieve Secrets (for Streamlit Cloud)
 ###############################################################################
 JINA_API_KEY = st.secrets["jina_api_key"]
 OPENAI_API_KEY = st.secrets["openai_api_key"]
@@ -116,7 +116,6 @@ def fetch_cip_colleges(trade: str, state: str) -> list:
     for item in results:
         name = item.get("school.name", "N/A")
         tuition = item.get("latest.cost.tuition.in_state", "N/A")
-        # CIP titles might be nested; handle carefully
         cip_entries = item.get("latest.programs.cip_4_digit", [])
         cip_titles = [x.get("title", "N/A") for x in cip_entries if x.get("title")]
         colleges.append({
@@ -222,6 +221,8 @@ def main():
         1. **BLS Projections** for a chosen trade & state (with explicit fallback to national data).
         2. **Colleges** offering CIP-based programs in that state, plus refined details from Jina.
         3. **Job Listings** from Indeed (via Jina search).
+
+        **Note:** Keys are read from `st.secrets`, suitable for Streamlit Cloud deployment.
         ---
         """
     )
@@ -252,9 +253,8 @@ def main():
             st.subheader("Job Listings (Indeed)")
             st.write(job_content)
 
-
 ###############################################################################
-# Create the Agent with JinaReaderTools, referencing secrets for API keys
+# Create the Agent with JinaReaderTools
 ###############################################################################
 agent = Agent(
     tools=[JinaReaderTools(api_key=JINA_API_KEY)],
