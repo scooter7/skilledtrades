@@ -17,8 +17,8 @@ COLLEGE_SCORECARD_API_KEY = st.secrets["college_scorecard_api_key"]
 agent = Agent(
     name="FirecrawlAgent",
     tools=[FirecrawlTools(api_key=FIRECRAWL_API_KEY, scrape=False, crawl=True)],
-    model=OpenAIChat(api_key=OPENAI_API_KEY),  # If you want GPT-based summarization
-    show_tool_calls=True,  # Optional: see debug info
+    model=OpenAIChat(api_key=OPENAI_API_KEY),
+    show_tool_calls=True,
     markdown=True
 )
 
@@ -30,6 +30,16 @@ CIP_CODES = {
     "Energy": ["15.0503", "03.0209", "47.0501"],
     "Healthcare": ["51.0000", "51.3801", "51.0801", "51.0707"],
     "Information Technology": ["11.0101", "11.0201", "11.1003", "11.0901"]
+}
+
+# Fallback synonyms for text-based search if CIP codes yield no results
+TRADE_SYNONYMS = {
+    "Manufacturing": ["manufacturing", "industrial", "production", "welding"],
+    "Automotive": ["automotive", "auto mechanics", "diesel", "collision repair"],
+    "Construction": ["construction", "carpentry", "plumbing", "hvac", "electrician"],
+    "Energy": ["energy", "renewable", "oil and gas", "power generation"],
+    "Healthcare": ["healthcare", "nursing", "medical", "clinical", "health sciences"],
+    "Information Technology": ["information technology", "computer science", "cybersecurity", "software"]
 }
 
 # Trades & State abbreviations
@@ -83,18 +93,19 @@ def fetch_job_listings(trade: str, state: str) -> str:
     response = agent.run(query)
     return response.content
 
-def fetch_colleges_with_fallback(trade: str, state: str) -> list:
+def fetch_cip_colleges(trade: str, state: str) -> list:
     """
-    1) Attempt CIP code queries.
-    2) If no results, fallback to text-based search (title__icontains).
+    1) Attempt CIP-based queries for the trade.
+    2) If no results, fallback to text-based search using synonyms in CIP titles.
     """
     abbrev = STATE_ABBREV_MAP.get(state)
     if not abbrev:
         return []
 
-    # 1) CIP-based search
     codes = CIP_CODES.get(trade, [])
     all_colleges = {}
+
+    # 1) CIP-based search
     for code in codes:
         url = "https://api.data.gov/ed/collegescorecard/v1/schools"
         params = {
@@ -112,14 +123,12 @@ def fetch_colleges_with_fallback(trade: str, state: str) -> list:
                 name = item.get("school.name", "N/A")
                 all_colleges[name] = item
 
-    # If we found results via CIP codes, return them
+    # If CIP queries found results, return them
     if all_colleges:
         return list(all_colleges.values())
 
-    # 2) Fallback: synonyms text search
-    # For example, if "Construction" might appear in CIP titles as "construction trades," etc.
-    # We'll do a broad "title__icontains" query with synonyms.
-    synonyms = ["construction", "carpentry", "hvac", ...]  # adjust for your trade
+    # 2) Fallback: text-based search using synonyms
+    synonyms = TRADE_SYNONYMS.get(trade, [trade.lower()])
     for kw in synonyms:
         url = "https://api.data.gov/ed/collegescorecard/v1/schools"
         params = {
@@ -164,13 +173,14 @@ def main():
         1. **Fetch BLS / workforce data** for a selected trade & state (fallback to national).
         2. **Retrieve Indeed job listings** for that trade & state.
         
-        It also uses the **College Scorecard** API (via CIP codes) to list relevant colleges.
+        It also uses the **College Scorecard** API (via CIP codes, with a text fallback) 
+        to list relevant colleges.
         
         **Note**: Firecrawl can be resource-intensive on free-tier Streamlit.
     """)
 
     selected_trade = st.selectbox("Select a Trade", TRADES)
-    selected_state = st.selectbox("Select a State", STATES)
+    selected_state = st.selectbox("Select a State", list(STATE_ABBREV_MAP.keys()))
 
     if st.button("Fetch Data"):
         with st.spinner("Retrieving BLS data..."):
