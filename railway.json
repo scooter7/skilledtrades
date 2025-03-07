@@ -1,6 +1,6 @@
 {
   "$schema": "https://railway.app/railway.schema.json",
   "deploy": {
-    "buildType": "DOCKERFILE"
+    "startCommand": "pip install -r requirements.txt && streamlit run app.py --server.port=$PORT --server.address=0.0.0.0"
   }
 }
