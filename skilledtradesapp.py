@@ -8,7 +8,7 @@ GOOGLE_CSE_ID = st.secrets["google_cse_id"]
 GOOGLE_API_KEY = st.secrets["google_api_key"]
 COLLEGE_SCORECARD_API_KEY = st.secrets["college_scorecard_api_key"]
 
-# State Abbreviations
+# State Abbreviation Map
 state_abbrev_map = {
     "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
     "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
@@ -35,31 +35,34 @@ TRADES = [
     "Information Technology"
 ]
 
-# CIP Synonyms for each trade
+# CIP Synonyms for each trade (expanded)
 CIP_SYNONYMS = {
     "Manufacturing": [
         "manufacturing", "industrial technology", "industrial production",
-        "machining", "welding", "fabrication"
+        "machining", "welding", "fabrication", "automation"
     ],
     "Automotive": [
         "automotive", "auto mechanics", "vehicle maintenance",
-        "diesel technology", "collision repair"
+        "diesel technology", "collision repair", "automotive technology"
     ],
     "Construction": [
-        "construction", "carpentry", "plumbing", "HVAC",
-        "electrician", "welding"
+        "construction", "carpentry", "plumbing", "hvac",
+        "electrician", "welding", "masonry", "building construction",
+        "construction management", "building trades", "residential construction"
     ],
     "Energy": [
         "energy", "renewable energy", "power generation", 
-        "utilities", "oil and gas", "wind technology"
+        "utilities", "oil and gas", "wind technology", "solar technology"
     ],
     "Healthcare": [
         "healthcare", "nursing", "medical assisting", 
-        "health sciences", "public health"
+        "health sciences", "public health", "medical technology",
+        "clinical laboratory", "respiratory therapy"
     ],
     "Information Technology": [
-        "information technology", "IT", "computer science", 
-        "software development", "networking", "cybersecurity"
+        "information technology", "it", "computer science", 
+        "software development", "networking", "cybersecurity",
+        "data science", "web development"
     ]
 }
 
@@ -82,17 +85,27 @@ def google_cse_search(query: str, num_results=5):
 
 def fetch_bls_data(trade: str, state: str):
     """
-    1) Search specifically for 2022-2032 occupational projections for (trade) in (state) site:bls.gov
-    2) If empty, fallback to national query.
+    Multi-step approach to find state-level BLS or workforce info, then fallback to national:
+      1) 2022-2032 occupational projections for {trade} in {state} site:bls.gov
+      2) {state} workforce development {trade} job outlook
+      3) 2022-2032 occupational projections for {trade} site:bls.gov (national)
     """
-    query_state = f"2022-2032 occupational projections for {trade} in {state} site:bls.gov"
-    results_state = google_cse_search(query_state, num_results=5)
-    if results_state:
-        return results_state
+    # Step 1: State-level BLS
+    query_1 = f"2022-2032 occupational projections for {trade} in {state} site:bls.gov"
+    results_1 = google_cse_search(query_1, num_results=5)
+    if results_1:
+        return results_1
 
-    # Fallback to national
-    query_national = f"2022-2032 occupational projections for {trade} site:bls.gov"
-    return google_cse_search(query_national, num_results=5)
+    # Step 2: State workforce dev
+    query_2 = f"{state} workforce development {trade} job outlook"
+    results_2 = google_cse_search(query_2, num_results=5)
+    if results_2:
+        return results_2
+
+    # Step 3: National BLS fallback
+    query_3 = f"2022-2032 occupational projections for {trade} site:bls.gov"
+    results_3 = google_cse_search(query_3, num_results=5)
+    return results_3
 
 def fetch_job_listings(trade: str, state: str):
     """
@@ -125,7 +138,7 @@ def fetch_cip_colleges_for_keyword(keyword: str, abbrev: str) -> list:
 def fetch_cip_colleges(trade: str, state: str) -> list:
     """
     Uses CIP_SYNONYMS to gather colleges for multiple synonyms,
-    merging them into one combined list (deduplicating by name).
+    merging them into one combined list (deduplicating by school.name).
     """
     abbrev = state_abbrev_map.get(state)
     if not abbrev:
@@ -165,23 +178,23 @@ def build_college_dataframe(trade: str, state: str) -> pd.DataFrame:
     return pd.DataFrame(table_rows)
 
 def main():
-    st.title("Industry & Career Insights (Google CSE + CIP Synonyms)")
+    st.title("Industry & Career Insights (Multi-step BLS + CIP Synonyms)")
     st.markdown("""
         **Features**:
-        1. BLS 2022–2032 projections (site:bls.gov) with fallback to national if state-level is empty
-        2. CIP-based college searches using synonyms (College Scorecard)
-        3. Indeed job listings (Google CSE)
+        1. **Multi-step BLS** (or workforce dev) queries for state-level data, fallback to national
+        2. **CIP synonyms** to catch more programs in College Scorecard
+        3. **Indeed job listings** (Google CSE)
         
-        This avoids Jina/Firecrawl and should be lighter on resources.
+        **No Jina/Firecrawl**—should be lighter on resources.
     """)
 
     trade = st.selectbox("Select a Trade", TRADES)
     state = st.selectbox("Select a State", list(state_abbrev_map.keys()))
 
     if st.button("Fetch Data"):
-        with st.spinner("Retrieving BLS Data..."):
+        with st.spinner("Retrieving BLS / Workforce Data..."):
             bls_results = fetch_bls_data(trade, state)
-            st.subheader("BLS Data / Workforce Outlook")
+            st.subheader("BLS / Workforce Outlook")
             if not bls_results:
                 st.write("No results found.")
             else:
