@@ -3,14 +3,13 @@ import requests
 import json
 import pandas as pd
 
-from agno.agent import Agent
-from agno.tools.jina import JinaReaderTools
-from agno.models.openai import OpenAIChat
-
-JINA_API_KEY = st.secrets["jina_api_key"]
-OPENAI_API_KEY = st.secrets["openai_api_key"]
+# Google CSE secrets
+GOOGLE_CSE_ID = st.secrets["google_cse_id"]
+GOOGLE_API_KEY = st.secrets["google_api_key"]
+# College Scorecard API key
 COLLEGE_SCORECARD_API_KEY = st.secrets["college_scorecard_api_key"]
 
+# State Abbreviations
 state_abbrev_map = {
     "Alabama": "AL", "Alaska": "AK", "Arizona": "AZ", "Arkansas": "AR",
     "California": "CA", "Colorado": "CO", "Connecticut": "CT", "Delaware": "DE",
@@ -27,49 +26,54 @@ state_abbrev_map = {
     "West Virginia": "WV", "Wisconsin": "WI", "Wyoming": "WY"
 }
 
+# Trade & State Options
 TRADES = [
-    "Manufacturing",
-    "Automotive",
-    "Construction",
-    "Energy",
-    "Healthcare",
-    "Information Technology"
+    "Manufacturing", "Automotive", "Construction", 
+    "Energy", "Healthcare", "Information Technology"
 ]
-
 STATES = list(state_abbrev_map.keys())
 
-def fetch_bls_data(agent: Agent, trade: str, state: str) -> str:
+def google_cse_search(query: str, num_results=5):
     """
-    1) Attempt to find BLS or workforce data specifically for (trade) in (state).
-    2) If the agent indicates no relevant info, fallback to searching national data
-       plus state workforce development info.
-    3) Return the summarized text.
+    Helper function to perform a Google Custom Search
+    and return up to `num_results` items.
     """
-    state_search_prompt = (
-        f"Search for: BLS data or workforce outlook for '{trade}' in '{state}'. "
-        "If no relevant info is found, respond with EXACTLY 'NO_DATA_FOUND'. Summarize clearly."
-    )
-    response1 = agent.run(state_search_prompt)
-    content1 = response1.content.strip()
-
-    if "NO_DATA_FOUND" in content1:
-        fallback_prompt = (
-            f"Search for: national BLS data or outlook for '{trade}', plus any workforce dev info for '{state}'. "
-            "Summarize clearly."
-        )
-        response2 = agent.run(fallback_prompt)
-        return response2.content
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+        "key": GOOGLE_API_KEY,
+        "cx": GOOGLE_CSE_ID,
+        "q": query,
+        "num": num_results
+    }
+    resp = requests.get(url, params=params)
+    if resp.status_code == 200:
+        data = resp.json()
+        return data.get("items", [])
     else:
-        return content1
+        return []
+
+def fetch_bls_data(trade: str, state: str):
+    """
+    Searches for BLS or workforce outlook data using Google CSE.
+    We'll simply return the top search results for display.
+    """
+    query = f"BLS data or workforce outlook for {trade} in {state}"
+    results = google_cse_search(query, num_results=5)
+    return results
+
+def fetch_job_listings(trade: str, state: str):
+    """
+    Searches for Indeed job listings using Google CSE.
+    We'll simply return the top search results for display.
+    """
+    query = f"Indeed job listings for {trade} in {state}"
+    results = google_cse_search(query, num_results=5)
+    return results
 
 def fetch_cip_colleges(trade: str, state: str) -> list:
     """
-    Uses College Scorecard to find up to 100 colleges in the given state
-    that have CIP program titles containing the trade keyword (case-insensitive).
-    Returns a list of dicts with keys:
-      - name
-      - tuition_in_state
-      - cip_titles (list of matching CIP program titles)
+    Uses the College Scorecard API to find up to 100 colleges in the given state
+    whose CIP titles contain the trade keyword (case-insensitive).
     """
     abbrev = state_abbrev_map.get(state)
     if not abbrev:
@@ -103,48 +107,9 @@ def fetch_cip_colleges(trade: str, state: str) -> list:
         })
     return colleges
 
-def refine_college_details(agent: Agent, college_name: str, trade: str) -> dict:
+def build_college_dataframe(trade: str, state: str) -> pd.DataFrame:
     """
-    Asks JinaReaderTools to search for program details about (college_name) + (trade),
-    returning a dictionary with the keys:
-      - degree_type
-      - program_duration
-      - offers_microcredentials
-      - mentions_ai
-    If no data is found, sets them to "N/A".
-    """
-    prompt = (
-        f"Search for: program details about '{trade}' at '{college_name}'. "
-        "Return the info in JSON with these keys: "
-        "degree_type, program_duration, offers_microcredentials, mentions_ai. "
-        "If not found, respond with 'N/A' for each key."
-    )
-    resp = agent.run(prompt)
-    content = resp.content.strip()
-
-    try:
-        details = json.loads(content)
-        return {
-            "degree_type": details.get("degree_type", "N/A"),
-            "program_duration": details.get("program_duration", "N/A"),
-            "offers_microcredentials": details.get("offers_microcredentials", "N/A"),
-            "mentions_ai": details.get("mentions_ai", "N/A")
-        }
-    except:
-        return {
-            "degree_type": "N/A",
-            "program_duration": "N/A",
-            "offers_microcredentials": "N/A",
-            "mentions_ai": "N/A"
-        }
-
-def build_college_dataframe(agent: Agent, trade: str, state: str) -> pd.DataFrame:
-    """
-    1) Fetch CIP-based colleges from College Scorecard.
-    2) For each college, ask JinaReaderTools for more details.
-    3) Return a DataFrame with columns:
-        College/University, Tuition Cost, CIP Titles,
-        Degree Type, Program Duration, Offers Microcredentials, Mentions AI
+    Builds a Pandas DataFrame from the CIP-based college lookups.
     """
     raw_colleges = fetch_cip_colleges(trade, state)
     if not raw_colleges:
@@ -152,72 +117,61 @@ def build_college_dataframe(agent: Agent, trade: str, state: str) -> pd.DataFram
 
     table_rows = []
     for c in raw_colleges:
-        details = refine_college_details(agent, c["name"], trade)
         row = {
             "College/University": c["name"],
             "Tuition Cost": c["tuition_in_state"],
-            "CIP Titles": ", ".join(c["cip_titles"]) if c["cip_titles"] else "N/A",
-            "Degree Type": details["degree_type"],
-            "Program Duration": details["program_duration"],
-            "Offers Microcredentials": details["offers_microcredentials"],
-            "Mentions AI": details["mentions_ai"]
+            "CIP Titles": ", ".join(c["cip_titles"]) if c["cip_titles"] else "N/A"
         }
         table_rows.append(row)
 
     return pd.DataFrame(table_rows)
 
-def fetch_job_listings(agent: Agent, trade: str, state: str) -> str:
-    """
-    Uses JinaReaderTools to search for Indeed job listings for the trade & state,
-    returning a summarized string.
-    """
-    prompt = (
-        f"Search for: Indeed job listings for '{trade}' in '{state}'. "
-        "List job title, company, location, and any direct links if available."
-    )
-    response = agent.run(prompt)
-    return response.content
-
 def main():
-    st.title("Industry & Career Insights (Jina + College Scorecard)")
-    st.markdown(
-        """
-        This app retrieves:
-        1. **BLS Projections** for a chosen trade & state (with explicit fallback to national data).
-        2. **Colleges** offering CIP-based programs in that state, plus refined details from Jina.
-        3. **Job Listings** from Indeed (via Jina search).
+    st.title("Industry & Career Insights (Google CSE + College Scorecard)")
+    st.markdown("""
+        **Features**:
+        1. BLS Projections / Workforce Data (via Google Custom Search)
+        2. Colleges (via College Scorecard API)
+        3. Job Listings (via Google Custom Search for Indeed)
 
-        **Note:** Keys are read from `st.secrets`, suitable for Streamlit Cloud deployment.
-        ---
-        """
-    )
+        **Note**: This approach uses less resources than Jina-based searching.
+    """)
 
-    selected_trade = st.selectbox("Select a Trade", TRADES)
-    selected_state = st.selectbox("Select a State", STATES)
+    trade = st.selectbox("Select a Trade", TRADES)
+    state = st.selectbox("Select a State", STATES)
 
     if st.button("Fetch Data"):
-        with st.spinner("Retrieving BLS Data..."):
-            bls_content = fetch_bls_data(agent, selected_trade, selected_state)
-            st.subheader("BLS Projections")
-            st.write(bls_content)
+        with st.spinner("Searching BLS data..."):
+            bls_results = fetch_bls_data(trade, state)
+            st.subheader("BLS Data / Workforce Outlook")
+            if not bls_results:
+                st.write("No results found.")
+            else:
+                for item in bls_results:
+                    st.write(f"**{item.get('title')}**")
+                    st.write(item.get("snippet"))
+                    st.write(item.get("link"))
+                    st.write("---")
 
-        with st.spinner("Retrieving Colleges..."):
-            df_colleges = build_college_dataframe(agent, selected_trade, selected_state)
+        with st.spinner("Fetching Colleges..."):
+            df_colleges = build_college_dataframe(trade, state)
             st.subheader("Colleges & Universities")
             if df_colleges.empty:
                 st.write("No colleges found for this state & trade.")
             else:
                 st.dataframe(df_colleges)
 
-        with st.spinner("Retrieving Job Listings..."):
-            job_content = fetch_job_listings(agent, selected_trade, selected_state)
+        with st.spinner("Searching Indeed Job Listings..."):
+            job_results = fetch_job_listings(trade, state)
             st.subheader("Job Listings (Indeed)")
-            st.write(job_content)
-
-agent = Agent(
-    tools=[JinaReaderTools(api_key=JINA_API_KEY)],
-    model=OpenAIChat(api_key=OPENAI_API_KEY)
-)
+            if not job_results:
+                st.write("No job listings found.")
+            else:
+                for item in job_results:
+                    st.write(f"**{item.get('title')}**")
+                    st.write(item.get("snippet"))
+                    st.write(item.get("link"))
+                    st.write("---")
 
 if __name__ == "__main__":
     main()
