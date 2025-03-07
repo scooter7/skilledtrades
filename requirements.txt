@@ -1,4 +1,4 @@
 streamlit
-firecrawl
+firecrawl-py
 openai
 agno
