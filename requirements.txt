@@ -1,7 +1,7 @@
 streamlit
 firecrawl-py
 openai
-agno
+agno==1.1.9
 jina
 openai
 requests
